@@ -1,0 +1,161 @@
+#!/usr/bin/env perl
+use v5.12;
+use warnings;
+
+use Getopt::Long;
+
+our $VERSION = '0.1';
+
+GetOptions
+	'status|s' => \my $Status,
+	'list|l' => \my $List,
+	'apply|a' => \my $Apply,
+	'revert|r' => \my $Revert,
+	'changeset|c' => \my $Target_Changeset,
+	'no-act|n' => \my $No_Act,
+	'help|h' => \my $Help,
+		or die usage();
+
+my $mode_count = grep $_, $Status, $List, $Apply, $Revert;
+die usage("only one mode may be active at a time") if $mode_count > 1;
+$Status = 1 unless $mode_count;
+
+die usage() if $Help;
+
+my %Config = get_config();
+
+mode_status() if $Status;
+mode_list() if $List;
+mode_apply() if $Apply;
+mode_revert() if $Revert;
+
+use Data::Dumper;
+
+sub mode_status {
+	my $at = get_at();
+	my @changesets = get_changesets();
+
+	my $last;
+	foreach my $c (@changesets) {
+		if ($c->{nr} > $at) {
+			if ($last) {
+				say changeset_summary('  AT:', $last);
+			}
+			else {
+				say changeset_summary('  AT:', '-');
+			}
+			say changeset_summary('NEXT:', $c);
+			last;
+		}
+		$last = $c;
+	}
+}
+
+sub mode_list {
+	my $at = get_at();
+	my @changesets = get_changesets();
+
+	my ($found, $last);
+	foreach my $c (@changesets) {
+		say changeset_summary(' '.($c->{nr} > $at ? '-' : '+'), $c);
+	}
+}
+
+sub mode_apply {
+	
+}
+
+sub mode_revert {
+
+}
+
+sub changeset_summary {
+	my ($pfx, $c) = @_;
+	ref $c
+	? sprintf "%s %3d - %-20s (%s)", $pfx, $c->{nr}, $c->{comment}, $c->{file}
+	: sprintf "%s %3s", $pfx, $c;
+}
+
+sub get_at {
+	if ($Config{at_store}{mode} eq 'file') {
+		return 0 unless -f $Config{at_store}{where};
+
+		open my $fh, '<', $Config{at_store}{where}
+			or die usage("Cannot open at_store file $Config{at_store}{where}: $!");
+
+		my $at = do { local $/; readline $fh };
+		s/\A\s*//, s/\s*\z// for $at;
+		die usage("Garbled at_store file $Config{at_store}{where}") unless $at =~ /\A[0-9]+\z/;
+
+		return $at;
+	}
+	else {
+		die usage("Bad at_store mode in config: $Config{at_store}{mode}");
+	}
+}
+
+sub get_changesets {
+	opendir my $dh, $Config{schema_dir}
+		or die usage("Cannot open schema_dir $Config{schema_dir}: $!");
+
+	my @changesets;
+	my %numbers;
+	while (my $f = readdir $dh) {
+		next if 0 == index $f, '.' || !-f $f;
+		my $changeset_meta = parse_changeset_meta($f)
+			or die usage("Cannot parse changeset meta from filename $f");
+
+		if ($numbers{ $changeset_meta->{nr} }) {
+			die usage("Conflicting changeset number $changeset_meta->{nr} between $numbers{ $changeset_meta->{nr} } and $f");
+		}
+
+		$numbers{ $changeset_meta->{nr} } = $f;
+
+		push @changesets, $changeset_meta;
+	}
+
+	return sort { $a->{nr} <=> $b->{nr} } @changesets;
+}
+
+sub get_config {
+	return (
+		schema_dir => 'schema',
+		at_store => {
+			mode => 'file',
+			where => 'schema/.at',
+		},
+	);
+}
+
+sub parse_changeset_meta {
+	my ($fn) = @_;
+	if (my ($nr, $comment, $type) = $fn =~ /\A([0-9]+)[_-]([^.]+)\.(.*)/) {
+		$nr += 0;
+		return +{
+			nr => $nr,
+			comment => $comment,
+			type => $type,
+			file => $fn,
+		};
+	}
+}
+
+sub usage {
+	my $s = shift;
+	(my $p = $0) =~ s{.*/}{};
+	my $usage = <<"USAGE";
+$p <mode> [options]
+  --status    -s
+  --list      -l
+  --apply     -a
+  --revert    -r
+
+  --changeset -c
+  --no-act    -n
+  --help      -h
+ v$VERSION
+USAGE
+
+	defined $s ? "$s\n$usage" : $usage
+}
+
